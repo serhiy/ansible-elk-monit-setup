@@ -1,0 +1,7 @@
+# E-mail alerts configuration
+mail_server:
+mail_from:
+mail_to:
+# Monit ui credentials
+monit_user:
+monit_password:
