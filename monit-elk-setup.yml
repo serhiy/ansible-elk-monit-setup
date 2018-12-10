@@ -1,0 +1,146 @@
+- name: Install Monit
+  hosts: all
+  tasks:
+  - name: install monit
+    register: install_monit
+    yum:
+      name: monit
+  - name: remove default monitrc file
+    when: install_monit.changed
+    file:
+      path: /etc/monitrc
+      state: absent
+  - name: add empty monitrc file
+    when: install_monit.changed
+    file:
+      path: /etc/monitrc
+      state: touch
+      mode: 0700
+  - name: enable monit
+    systemd:
+      name: monit
+      enabled: yes
+
+
+- name: Configure Core Monit Service
+  hosts: all
+  tasks:
+    - name: update core /etc/monitrc configuration
+      register: update_core_configuration
+      blockinfile:
+        create: yes
+        path: /etc/monitrc
+        block: |
+          set daemon 60
+          set log syslog
+          set mailserver {{ mail_server }}
+          set mail-format { from: {{ mail_from }} }
+          set alert {{ mail_to }}
+          set httpd port 2812
+              allow 0.0.0.0/0.0.0.0
+              allow {{ monit_user }}:{{ monit_password }}
+          check system {{ ansible_hostname }}
+              if cpu usage > 90% for 10 cycles then alert
+              if swap usage > 50% for 10 cycles then alert
+              if memory usage > 80% for 10 cycles then alert
+          check filesystem "root" with path /dev/vda1
+              if space usage > 80% for 10 cycles then alert
+        insertafter: EOF
+        state: present
+    - name: open firewall ports
+      firewalld:
+        port: 2812/tcp
+        permanent: true
+        state: enabled
+    - name: restart monit
+      when: update_core_configuration.changed
+      systemd:
+        name: monit
+        state: restarted
+
+
+
+- name: Configure Logstash Monit Service
+  hosts: logstash
+  tasks:
+    - name: update logstash /etc/monitrc configuration
+      register: update_logstash_configuration
+      blockinfile:
+        create: yes
+        path: /etc/monitrc
+        block: |
+          check process logstash
+              matching "logstash"
+              start program = "/bin/systemctl start logstash"
+              stop program = "/bin/systemctl stop logstash"
+              if does not exist then alert
+        insertafter: EOF
+        marker: "# {mark} ANSIBLE MANAGED BLOCK LOGSTASH"
+        state: present
+    - name: restart monit
+      when: update_logstash_configuration.changed
+      systemd:
+        name: monit
+        state: restarted
+
+
+
+- name: Configure Elasticsearch Monit Service
+  hosts: elasticsearch
+  tasks:
+    - name: update elasticsearch /etc/monitrc configuration
+      register: update_elasticsearch_configuration
+      blockinfile:
+        create: yes
+        path: /etc/monitrc
+        block: |
+          check process elasticsearch
+              matching "elasticsearch"
+              start program = "/bin/systemctl start elasticsearch"
+              stop program = "/bin/systemctl stop elasticsearch"
+              if does not exist then alert
+        insertafter: EOF
+        marker: "# {mark} ANSIBLE MANAGED BLOCK ELASTICSEARCH"
+        state: present
+    - name: restart monit
+      when: update_elasticsearch_configuration.changed
+      systemd:
+        name: monit
+        state: restarted
+
+
+
+- name: Configure Kibana Monit Service
+  hosts: kibana
+  tasks:
+    - name: update kibana /etc/monitrc configuration
+      register: update_kibana_configuration
+      blockinfile:
+        create: yes
+        path: /etc/monitrc
+        block: |
+          check process kibana
+              matching "kibana"
+              start program = "/bin/systemctl start kibana"
+              stop program = "/bin/systemctl stop kibana"
+              if does not exist then alert
+        insertafter: EOF
+        marker: "# {mark} ANSIBLE MANAGED BLOCK KIBANA"
+        state: present
+    - name: update remote monitoring /etc/monitrc configuration
+      register: update_remote_configuration
+      blockinfile:
+        create: yes
+        path: /etc/monitrc
+        block: |
+          check host {{ item }} with address {{ item }}
+              if failed ping then alert
+        insertafter: EOF
+        marker: "# {mark} ANSIBLE MANAGED BLOCK MONITOR {{ item|upper }}"
+        state: present
+      with_items: "{{ groups['all'] | reject('equalto', inventory_hostname) | list }}"
+    - name: restart monit
+      when: update_kibana_configuration.changed or update_remote_configuration.changed
+      systemd:
+        name: monit
+        state: restarted
